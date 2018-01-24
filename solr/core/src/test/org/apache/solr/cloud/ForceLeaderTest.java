@@ -97,6 +97,10 @@ public class ForceLeaderTest extends HttpPartitionTest {
       log.info("Before put non leaders into lower term: " + printClusterStateInfo());
       putNonLeadersIntoLowerTerm(testCollectionName, SHARD1, zkController, leader, notLeaders);
 
+      for (Replica replica : notLeaders) {
+        waitForState(testCollectionName, replica.getName(), State.DOWN, 60000);
+      }
+      waitForState(testCollectionName, leader.getName(), State.DOWN, 60000);
       cloudClient.getZkStateReader().forceUpdateCollection(testCollectionName);
       ClusterState clusterState = cloudClient.getZkStateReader().getClusterState();
       int numActiveReplicas = getNumberOfActiveReplicas(clusterState, testCollectionName, SHARD1);

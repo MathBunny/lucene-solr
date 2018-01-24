@@ -450,7 +450,7 @@ public class HttpPartitionTest extends AbstractFullDistribZkTestBase {
     attemptCollectionDelete(cloudClient, testCollectionName);
   }
 
-  private void waitForState(String collection, String replicaName, Replica.State state, long ms) throws KeeperException, InterruptedException {
+  protected void waitForState(String collection, String replicaName, Replica.State state, long ms) throws KeeperException, InterruptedException {
     TimeOut timeOut = new TimeOut(ms, TimeUnit.MILLISECONDS, TimeSource.CURRENT_TIME);
     Replica.State replicaState = Replica.State.ACTIVE;
     while (!timeOut.hasTimedOut()) {
