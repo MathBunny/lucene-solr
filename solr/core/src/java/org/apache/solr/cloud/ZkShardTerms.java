@@ -288,7 +288,11 @@ public class ZkShardTerms implements AutoCloseable{
         if (numWatcher.compareAndSet(0, 1)) {
           watcher = event -> {
             // session events are not change events, and do not remove the watcher
-            if (Watcher.Event.EventType.None.equals(event.getType())) {
+            if (Watcher.Event.EventType.None == event.getType()) {
+              if (Watcher.Event.KeeperState.Disconnected == event.getState()
+                  || Watcher.Event.KeeperState.Expired == event.getState()) {
+                numWatcher.compareAndSet(1, 0);
+              }
               return;
             }
             numWatcher.compareAndSet(1, 0);
