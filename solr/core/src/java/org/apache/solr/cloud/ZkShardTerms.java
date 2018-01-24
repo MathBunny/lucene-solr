@@ -74,6 +74,7 @@ public class ZkShardTerms implements AutoCloseable{
   private final Set<CoreTermWatcher> listeners = new HashSet<>();
 
   private Terms terms;
+  private long sessionId = -1;
 
   // Listener of a core for shard's term change events
   interface CoreTermWatcher {
@@ -285,7 +286,7 @@ public class ZkShardTerms implements AutoCloseable{
       // This block is synchronized because we want only one and at least one valid watcher is watching the term node.
       Watcher watcher = null;
       try {
-        if (numWatcher.compareAndSet(0, 1)) {
+        if (numWatcher.compareAndSet(0, 1) || sessionId != zkClient.getSolrZooKeeper().getSessionId()) {
           watcher = event -> {
             // session events are not change events, and do not remove the watcher
             if (Watcher.Event.EventType.None == event.getType()) {
@@ -297,6 +298,7 @@ public class ZkShardTerms implements AutoCloseable{
             numWatcher.compareAndSet(1, 0);
             refreshTerms(false);
           };
+          sessionId = zkClient.getSolrZooKeeper().getSessionId();
         }
 
         if (earlyStop && watcher == null) return;
