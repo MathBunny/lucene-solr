@@ -306,14 +306,13 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
     addDoc(collection, 6, leaderJetty);
     JettySolrRunner oldJetty = getJettyForReplica(replicaInOldMode);
     oldJetty.stop();
-    upgrade(oldJetty);
-
-    getProxyForReplica(leader).reopen();
-    getProxyForReplica(replicaInOldMode).reopen();
-
     waitForState("Node did not leave", collection, (liveNodes, collectionState)
         -> liveNodes.size() == 2);
+    upgrade(oldJetty);
+
     oldJetty.start();
+    getProxyForReplica(leader).reopen();
+    getProxyForReplica(replicaInOldMode).reopen();
 
     waitForState("Timeout waiting for recovering", collection, clusterShape(1, 3));
     assertDocsExistInAllReplicas(Arrays.asList(replicaInNewMode, replicaInOldMode), collection, 0, 6);
