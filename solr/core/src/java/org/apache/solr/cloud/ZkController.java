@@ -324,7 +324,7 @@ public class ZkController {
           @Override
           public void command() {
             log.info("ZooKeeper session re-connected ... refreshing core states after session expiration.");
-
+            clearZkCollectionTerms();
             try {
               zkStateReader.createClusterStateWatchersAndUpdate();
 
@@ -1043,8 +1043,6 @@ public class ZkController {
       // This flag is used for testing rolling updates and should be removed in SOLR-11812
       boolean isRunningInNewLIR = "new".equals(desc.getCoreProperty("lirVersion", "new"));
       if (isRunningInNewLIR) {
-        // this call is useful in case of reconnecting to ZK
-        shardTerms.refreshTerms(true);
         shardTerms.registerTerm(coreZkNodeName);
       }
       String shardId = cloudDesc.getShardId();
@@ -1476,6 +1474,13 @@ public class ZkController {
     synchronized (collectionToTerms) {
       if (!collectionToTerms.containsKey(collection)) collectionToTerms.put(collection, new ZkCollectionTerms(collection, zkClient));
       return collectionToTerms.get(collection);
+    }
+  }
+
+  public void clearZkCollectionTerms() {
+    synchronized (collectionToTerms) {
+      collectionToTerms.values().forEach(ZkCollectionTerms::close);
+      collectionToTerms.clear();
     }
   }
 

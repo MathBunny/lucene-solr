@@ -25,7 +25,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.cloud.SolrZkClient;
@@ -60,21 +61,21 @@ import org.slf4j.LoggerFactory;
  * <li>A replica sets its term equals to leader's term
  * <li>The leader increase its term and some other replicas by 1
  * </ul>
+ * This class should not be reused after {@link org.apache.zookeeper.Watcher.Event.KeeperState#Expired} event
  */
 public class ZkShardTerms implements AutoCloseable{
 
   private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
   private final Object writingLock = new Object();
-  private final AtomicInteger numWatcher = new AtomicInteger(0);
   private final String collection;
   private final String shard;
   private final String znodePath;
   private final SolrZkClient zkClient;
   private final Set<CoreTermWatcher> listeners = new HashSet<>();
+  private final AtomicBoolean isClosed = new AtomicBoolean(false);
 
   private Terms terms;
-  private long sessionId = -1;
 
   // Listener of a core for shard's term change events
   interface CoreTermWatcher {
@@ -88,7 +89,8 @@ public class ZkShardTerms implements AutoCloseable{
     this.shard = shard;
     this.zkClient = zkClient;
     ensureTermNodeExist();
-    refreshTerms(false);
+    refreshTerms();
+    retryRegisterWatcher();
     ObjectReleaseTracker.track(this);
   }
 
@@ -124,7 +126,10 @@ public class ZkShardTerms implements AutoCloseable{
 
   public void close() {
     // no watcher will be registered
-    numWatcher.set(2);
+    isClosed.set(true);
+    synchronized (listeners) {
+      listeners.clear();
+    }
     ObjectReleaseTracker.release(this);
   }
 
@@ -201,11 +206,6 @@ public class ZkShardTerms implements AutoCloseable{
     }
   }
 
-  // package private for testing, only used by tests
-  int getNumWatcher() {
-    return numWatcher.get();
-  }
-
   /**
    * Set new terms to ZK.
    * In case of correspond ZK term node is not created, create it
@@ -235,7 +235,7 @@ public class ZkShardTerms implements AutoCloseable{
       return true;
     } catch (KeeperException.BadVersionException e) {
       log.info("Failed to save terms, version is not match, retrying");
-      refreshTerms(false);
+      refreshTerms();
     } catch (KeeperException.NoNodeException e) {
       throw e;
     } catch (Exception e) {
@@ -275,48 +275,71 @@ public class ZkShardTerms implements AutoCloseable{
   }
 
   /**
-   * Fetch the latest terms from ZK.
-   * This method will atomically register a watcher to the correspond ZK term node,
-   * so {@link ZkShardTerms#terms} will stay up to date.
-   * @param earlyStop early stop if the ZK node is already watched
+   * Fetch latest terms from ZK
    */
-  public void refreshTerms(boolean earlyStop) {
+  public void refreshTerms() {
     Terms newTerms;
-    synchronized (numWatcher) {
-      // This block is synchronized because we want only one and at least one valid watcher is watching the term node.
-      Watcher watcher = null;
-      try {
-        if (numWatcher.compareAndSet(0, 1) || sessionId != zkClient.getSolrZooKeeper().getSessionId()) {
-          watcher = event -> {
-            // session events are not change events, and do not remove the watcher
-            if (Watcher.Event.EventType.None == event.getType()) {
-              if (Watcher.Event.KeeperState.Expired == event.getState()) {
-                numWatcher.compareAndSet(1, 0);
-              }
-              return;
-            }
-            numWatcher.compareAndSet(1, 0);
-            refreshTerms(false);
-          };
-          sessionId = zkClient.getSolrZooKeeper().getSessionId();
-        }
-
-        if (earlyStop && watcher == null) return;
-
-        Stat stat = new Stat();
-        byte[] data = zkClient.getData(znodePath, watcher, stat, true);
-        newTerms = new Terms((Map<String, Long>) Utils.fromJSON(data), stat.getVersion());
-      } catch (InterruptedException e) {
-        Thread.interrupted();
-        throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Error updating shard term for collection:" + collection, e);
-      } catch (KeeperException e) {
-        // if an keeper exception is thrown, the watcher will never be called
-        if (watcher != null) numWatcher.compareAndSet(1, 0);
-        throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Error updating shard term for collection:" + collection, e);
-      }
+    try {
+      Stat stat = new Stat();
+      byte[] data = zkClient.getData(znodePath, null, stat, true);
+      newTerms = new Terms((Map<String, Long>) Utils.fromJSON(data), stat.getVersion());
+    } catch (KeeperException e) {
+      Thread.interrupted();
+      throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Error updating shard term for collection:" + collection, e);
+    } catch (InterruptedException e) {
+      throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Error updating shard term for collection:" + collection, e);
     }
+
     setNewTerms(newTerms);
   }
+
+  /**
+   * Retry register a watcher to the correspond ZK term node
+   */
+  private void retryRegisterWatcher() {
+    while (!isClosed.get()) {
+      try {
+        registerWatcher();
+        return;
+      } catch (KeeperException.SessionExpiredException | KeeperException.AuthFailedException e) {
+        isClosed.set(true);
+        log.error("Failed watching shard term for collection: {} due to unrecoverable exception", collection, e);
+        return;
+      } catch (KeeperException e) {
+        log.warn("Failed watching shard term for collection:{}, retrying!", collection, e);
+        try {
+          zkClient.getConnectionManager().waitForConnected(zkClient.getZkClientTimeout());
+        } catch (TimeoutException te) {
+          if (Thread.interrupted()) {
+            throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Error watching shard term for collection:" + collection, te);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Register a watcher to the correspond ZK term node
+   */
+  private void registerWatcher() throws KeeperException {
+    Watcher watcher = event -> {
+      // session events are not change events, and do not remove the watcher
+      if (Watcher.Event.EventType.None == event.getType()) {
+        return;
+      }
+      retryRegisterWatcher();
+      // Some events may be missed during register a watcher, so it is safer to refresh terms after registering watcher
+      refreshTerms();
+    };
+    try {
+      // exists operation is faster than getData operation
+      zkClient.exists(znodePath, watcher, true);
+    } catch (InterruptedException e) {
+      Thread.interrupted();
+      throw new SolrException(SolrException.ErrorCode.SERVER_ERROR, "Error watching shard term for collection:" + collection, e);
+    }
+  }
+
 
   /**
    * Atomically update {@link ZkShardTerms#terms} and call listeners

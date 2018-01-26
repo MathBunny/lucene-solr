@@ -86,23 +86,23 @@ public class ZkShardTermsTest extends SolrCloudTestCase {
     rep1Terms.registerTerm("rep1");
     rep2Terms.registerTerm("rep2");
     try (ZkShardTerms zkShardTerms = new ZkShardTerms(collection, "shard1", cluster.getZkClient())) {
-      assertEquals(0L, zkShardTerms.getTerms().get("rep1").longValue());
-      assertEquals(0L, zkShardTerms.getTerms().get("rep2").longValue());
+      assertEquals(0L, zkShardTerms.getTerm("rep1"));
+      assertEquals(0L, zkShardTerms.getTerm("rep2"));
     }
     waitFor(2, () -> rep1Terms.getTerms().size());
     rep1Terms.ensureTermsIsHigher("rep1", Collections.singleton("rep2"));
-    assertEquals(1L, rep1Terms.getTerms().get("rep1").longValue());
-    assertEquals(0L, rep1Terms.getTerms().get("rep2").longValue());
+    assertEquals(1L, rep1Terms.getTerm("rep1"));
+    assertEquals(0L, rep1Terms.getTerm("rep2"));
 
     // assert registerTerm does not override current value
     rep1Terms.registerTerm("rep1");
-    assertEquals(1L, rep1Terms.getTerms().get("rep1").longValue());
+    assertEquals(1L, rep1Terms.getTerm("rep1"));
 
-    waitFor(1L, () -> rep2Terms.getTerms().get("rep1"));
+    waitFor(1L, () -> rep2Terms.getTerm("rep1"));
     rep2Terms.setEqualsToMax("rep2");
-    assertEquals(1L, rep2Terms.getTerms().get("rep2").longValue());
+    assertEquals(1L, rep2Terms.getTerm("rep2"));
     rep2Terms.registerTerm("rep2");
-    assertEquals(1L, rep2Terms.getTerms().get("rep2").longValue());
+    assertEquals(1L, rep2Terms.getTerm("rep2"));
 
     // zkShardTerms must stay updated by watcher
     Map<String, Long> expectedTerms = new HashMap<>();
@@ -189,54 +189,6 @@ public class ZkShardTermsTest extends SolrCloudTestCase {
 
     leaderTerms.close();
     replicaTerms.close();
-  }
-
-  public void testCoreTermWatcherOnLosingZKConnection() throws InterruptedException, IOException, KeeperException, TimeoutException {
-    String collection = "testCoreTermWatcherOnLosingZKConnection";
-
-    String zkDir = createTempDir("zkData").toFile().getAbsolutePath();
-    ZkTestServer server = new ZkTestServer(zkDir);
-    try {
-      server.run();
-      try (SolrZkClient zkClient = new SolrZkClient(server.getZkAddress(), 1500)) {
-        zkClient.makePath("/", true);
-        zkClient.makePath("/collections", true);
-      }
-
-      try (SolrZkClient leaderZkClient = new SolrZkClient(server.getZkAddress(), 1500);
-           ZkShardTerms leaderTerms = new ZkShardTerms(collection, "shard1", leaderZkClient)) {
-        leaderTerms.registerTerm("leader");
-        AtomicInteger count = new AtomicInteger(0);
-        Set<ZkShardTerms> shardTerms = new HashSet<>();
-        OnReconnect onReconnect = () -> {
-          log.info("On reconnect {}", shardTerms);
-          shardTerms.iterator().next().refreshTerms(true);
-        };
-        try (SolrZkClient replicaZkClient = new SolrZkClient(server.getZkAddress(), 1500, 1500, new DefaultConnectionStrategy(), onReconnect);
-             ZkShardTerms replicaTerms = new ZkShardTerms(collection, "shard1", replicaZkClient)) {
-          shardTerms.add(replicaTerms);
-          replicaTerms.addListener(terms -> {
-            count.incrementAndGet();
-            return true;
-          });
-          replicaTerms.registerTerm("replica");
-          waitFor(1, count::get);
-          server.expire(replicaZkClient.getSolrZooKeeper().getSessionId());
-          leaderTerms.ensureTermsIsHigher("leader", Collections.singleton("replica"));
-          replicaZkClient.getConnectionManager().waitForDisconnected(10000);
-          replicaZkClient.getConnectionManager().waitForConnected(10000);
-          waitFor(2, count::get);
-          waitFor(1, replicaTerms::getNumWatcher);
-          replicaTerms.setEqualsToMax("replica");
-          waitFor(3, count::get);
-          waitFor(1L, () -> leaderTerms.getTerms().get("replica"));
-          leaderTerms.ensureTermsIsHigher("leader", Collections.singleton("replica"));
-          waitFor(4, count::get);
-        }
-      }
-    } finally {
-      server.shutdown();
-    }
   }
 
   public void testEnsureTermsIsHigher() {

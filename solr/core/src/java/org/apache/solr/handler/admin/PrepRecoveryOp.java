@@ -128,7 +128,7 @@ class PrepRecoveryOp implements CoreAdminHandler.CoreAdminOp {
               ZkShardTerms shardTerms = coreContainer.getZkController().getShardTerms(collectionName, slice.getName());
               // if the replica is waiting for leader to see recovery state, the leader should refresh its terms
               if (waitForState == Replica.State.RECOVERING && shardTerms.registered(coreNodeName) && !shardTerms.canBecomeLeader(coreNodeName)) {
-                shardTerms.refreshTerms(false);
+                shardTerms.refreshTerms();
               }
 
               boolean onlyIfActiveCheckResult = onlyIfLeaderActive != null && onlyIfLeaderActive && localState != Replica.State.ACTIVE;
