@@ -1136,7 +1136,7 @@ public class ZkController {
           publish(desc, Replica.State.ACTIVE);
         }
 
-        if (isRunningInNewLIR) {
+        if (isRunningInNewLIR && replicaType != Type.PULL) {
           shardTerms.addListener(new RecoveringCoreTermWatcher(core));
         }
         core.getCoreDescriptor().getCloudDescriptor().setHasRegistered(true);
