@@ -180,6 +180,10 @@ public class ForceLeaderTest extends HttpPartitionTest {
     log.info("Sending a doc during the network partition...");
     JettySolrRunner leaderJetty = getJettyOnPort(getReplicaPort(leader));
     sendDoc(2, null, leaderJetty);
+    
+    for (Replica replica : notLeaders) {
+      waitForState(collectionName, replica.getName(), State.DOWN, 60000);
+    }
 
     // Kill the leader
     log.info("Killing leader for shard1 of " + collectionName + " on node " + leader.getNodeName() + "");
