@@ -243,15 +243,9 @@ public final class JoinUtil {
         @Override
         public void collect(int doc) throws IOException {
           assert docsInOrder(doc);
-          int dvDocID = numericDocValues.docID();
-          if (dvDocID < doc) {
-            dvDocID = numericDocValues.advance(doc);
-          }
-          long value;
-          if (dvDocID == doc) {
+          long value = 0;
+          if (numericDocValues.advanceExact(doc)) {
             value = numericDocValues.longValue();
-          } else {
-            value = 0;
           }
           joinValues.add(value);
           if (needsScore) {
